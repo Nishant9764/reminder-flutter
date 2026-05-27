@@ -9,16 +9,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # Java 17 (recommended for modern Flutter/Gradle)
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
+      # Setup Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -26,12 +31,31 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Flutter Pub Get
+      # Show versions
+      - name: Flutter Doctor
+        run: flutter doctor -v
+
+      # Clean old generated files
+      - name: Clean Project
+        run: flutter clean
+
+      # Get packages
+      - name: Install Dependencies
         run: flutter pub get
 
-      - name: Build APK
-        run: flutter build apk --release
+      # Regenerate platform folders safely
+      - name: Regenerate Android Files
+        run: flutter create .
 
+      # Accept licenses
+      - name: Accept Android Licenses
+        run: yes | flutter doctor --android-licenses
+
+      # Build release APK
+      - name: Build APK
+        run: flutter build apk --release --verbose
+
+      # Upload APK artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
