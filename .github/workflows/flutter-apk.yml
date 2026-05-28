@@ -1,25 +1,3 @@
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  .github/workflows/build_apk.yml                                     ║
-# ║  Builds a signed release APK on every push to main / on manual       ║
-# ║  trigger, and attaches it to a GitHub Release automatically.          ║
-# ╚══════════════════════════════════════════════════════════════════════╝
-#
-# ── Required GitHub Secrets ───────────────────────────────────────────────────
-#   KEYSTORE_BASE64   →  base64-encoded JKS keystore file
-#                        Generate: keytool -genkey -v -keystore lumina.jks \
-#                          -keyalg RSA -keysize 2048 -validity 10000 \
-#                          -alias lumina
-#                        Encode:   base64 -i lumina.jks | pbcopy   (macOS)
-#                                  base64 lumina.jks               (Linux)
-#
-#   KEY_ALIAS         →  The alias used above (e.g.  lumina)
-#   KEY_PASSWORD      →  Password for the key alias
-#   STORE_PASSWORD    →  Password for the keystore file
-#
-# How to add secrets:
-#   GitHub repo → Settings → Secrets and variables → Actions → New repository secret
-# ─────────────────────────────────────────────────────────────────────────────
-
 name: Build & Release APK
 
 on:
@@ -73,17 +51,23 @@ jobs:
           flutter --version
           dart   --version
 
-      # 5 ── Ensure Gradle wrapper meets AGP minimum version ──────────────────
-      # FIX: The Android Gradle Plugin in this project requires Gradle 9.1.0+.
-      #      Flutter 3.27+ ships a flutter.groovy compatible with Groovy 4.x,
-      #      so there is no longer any reason to stay below Gradle 8.8.
-      - name: Patch Gradle wrapper (pin to 9.1.0)
+      # 5 ── Fix groovy.xml.QName removed in Groovy 4.x (Gradle 9+) ───────────
+      # ROOT CAUSE: AGP in this project requires Gradle 9.1.0+, which ships
+      #   Groovy 4.x.  Groovy 4 removed groovy.xml.QName.  Flutter 3.27.4's
+      #   flutter.groovy still imports it → compilation crash.
+      # FIX: Patch flutter.groovy on the runner to use javax.xml.namespace.QName
+      #   which is the standard Java replacement and works in Groovy 3 & 4.
+      #   No project files are touched; the patch only affects the cached SDK.
+      - name: Patch flutter.groovy (fix QName for Groovy 4.x / Gradle 9+)
         run: |
-          sed -i \
-            's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-9.1.0-all.zip|' \
-            android/gradle/wrapper/gradle-wrapper.properties
-          echo "Gradle wrapper pinned to 9.1.0:"
-          cat android/gradle/wrapper/gradle-wrapper.properties
+          FLUTTER_GROOVY=$(find "$FLUTTER_ROOT" -name "flutter.groovy" 2>/dev/null | head -1)
+          if [ -n "$FLUTTER_GROOVY" ]; then
+            sed -i 's/import groovy\.xml\.QName/import javax.xml.namespace.QName/' "$FLUTTER_GROOVY"
+            echo "Patched QName import in: $FLUTTER_GROOVY"
+            grep "QName" "$FLUTTER_GROOVY"
+          else
+            echo "flutter.groovy not found — skipping patch (may already be fixed upstream)"
+          fi
 
       # 6 ── Install pub dependencies ─────────────────────────────────────────
       - name: Install dependencies
