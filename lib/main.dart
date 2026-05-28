@@ -1,24 +1,41 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'providers/task_provider.dart';
+import 'screens/home_screen.dart';
 import 'services/notification_service.dart';
 import 'theme/app_theme.dart';
-import 'screens/home_screen.dart';
 
 Future<void> main() async {
+  // Ensure Flutter engine is ready before calling native code
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize notifications
+  // Initialise notification plugin + timezone data
   await NotificationService.initialize();
 
-  final provider = TaskProvider();
-  await provider.init();
+  // Force portrait — remove these two lines to allow landscape
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+
+  // Edge-to-edge dark status/nav bars
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor:                   Colors.transparent,
+      statusBarIconBrightness:          Brightness.light,
+      statusBarBrightness:              Brightness.dark,
+      systemNavigationBarColor:         AppTheme.background,
+      systemNavigationBarIconBrightness: Brightness.light,
+    ),
+  );
 
   runApp(
-    ChangeNotifierProvider.value(
-      value: provider,
-      child: const LuminaApp(),
+    ChangeNotifierProvider(
+      create: (_) => TaskProvider()..init(),
+      child:  const LuminaApp(),
     ),
   );
 }
@@ -29,10 +46,10 @@ class LuminaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Lumina Reminders',
+      title:                    'Lumina',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.darkTheme,
-      home: const HomeScreen(),
+      theme:                    AppTheme.darkTheme,
+      home:                     const HomeScreen(),
     );
   }
 }
