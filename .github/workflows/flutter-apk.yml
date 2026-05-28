@@ -194,5 +194,10 @@ jobs:
         run: flutter pub get
 
       - name: Run tests
-        run: flutter test --reporter compact
+        run: |
+          if [ -d "test" ] && [ -n "$(find test -name '*_test.dart' 2>/dev/null)" ]; then
+            flutter test --reporter compact
+          else
+            echo "No test files found — skipping."
+          fi
         continue-on-error: true
