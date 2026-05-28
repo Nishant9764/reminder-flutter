@@ -24,8 +24,8 @@ class ToastWidget extends StatefulWidget {
 class _ToastWidgetState extends State<ToastWidget>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
-  late final Animation<double> _fade;
-  late final Animation<Offset> _slide;
+  late final Animation<double>  _fade;
+  late final Animation<Offset>  _slide;
 
   @override
   void initState() {
@@ -37,7 +37,7 @@ class _ToastWidgetState extends State<ToastWidget>
     _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
     _slide = Tween<Offset>(
       begin: const Offset(0, 0.35),
-      end: Offset.zero,
+      end:   Offset.zero,
     ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
     _ctrl.forward();
   }
@@ -46,40 +46,28 @@ class _ToastWidgetState extends State<ToastWidget>
 
   Color get _border {
     switch (widget.toast.type) {
-      case 'success':
-        return AppTheme.success.withValues(alpha: 0.3);
-      case 'warning':
-        return AppTheme.warning.withValues(alpha: 0.3);
-      case 'error':
-        return AppTheme.danger.withValues(alpha: 0.3);
-      default:
-        return AppTheme.accent.withValues(alpha: 0.32);
+      case 'success': return AppTheme.success.withOpacity(0.3);
+      case 'warning': return AppTheme.warning.withOpacity(0.3);
+      case 'error':   return AppTheme.danger.withOpacity(0.3);
+      default:        return AppTheme.accent.withOpacity(0.32);
     }
   }
 
   Color get _bg {
     switch (widget.toast.type) {
-      case 'success':
-        return AppTheme.successGlow;
-      case 'warning':
-        return AppTheme.warningGlow;
-      case 'error':
-        return AppTheme.dangerGlow;
-      default:
-        return AppTheme.accentGlow;
+      case 'success': return AppTheme.successGlow;
+      case 'warning': return AppTheme.warningGlow;
+      case 'error':   return AppTheme.dangerGlow;
+      default:        return AppTheme.accentGlow;
     }
   }
 
   Color get _iconColor {
     switch (widget.toast.type) {
-      case 'success':
-        return AppTheme.success;
-      case 'warning':
-        return AppTheme.warning;
-      case 'error':
-        return AppTheme.danger;
-      default:
-        return AppTheme.accentLight;
+      case 'success': return AppTheme.success;
+      case 'warning': return AppTheme.warning;
+      case 'error':   return AppTheme.danger;
+      default:        return AppTheme.accentLight;
     }
   }
 
@@ -127,7 +115,7 @@ class _ToastWidgetState extends State<ToastWidget>
                 child: Icon(
                   Icons.close,
                   size: 14,
-                  color: Colors.white.withValues(alpha: 0.3),
+                  color: Colors.white.withOpacity(0.3),
                 ),
               ),
             ],
