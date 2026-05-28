@@ -117,13 +117,27 @@ jobs:
           path:             build/app/outputs/flutter-apk/*.apk
           retention-days:   30
 
-      # 12 ── Create GitHub Release (only on version tags or main branch) ─────
+      # 12 ── Compute release tag & name ──────────────────────────────────────
+      # FIX: Moved ternary logic into a shell step to avoid YAML comment-char
+      #      (#) and unclosed-expression errors in inline ${{ }} expressions.
+      - name: Set release metadata
+        id: meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "tag_name=${{ github.ref_name }}"             >> $GITHUB_OUTPUT
+            echo "release_name=Lumina ${{ github.ref_name }}"  >> $GITHUB_OUTPUT
+          else
+            echo "tag_name=build-${{ github.run_number }}"                >> $GITHUB_OUTPUT
+            echo "release_name=Lumina Build ${{ github.run_number }}"     >> $GITHUB_OUTPUT
+          fi
+
+      # 13 ── Create GitHub Release (only on version tags or main branch) ─────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
-          name:     ${{ startsWith(github.ref, 'refs/tags/') && format('Lumina {0}', github.ref_name) || format('Lumina Build #{0}', github.run_number) }}
+          tag_name: ${{ steps.meta.outputs.tag_name }}
+          name:     ${{ steps.meta.outputs.release_name }}
           body: |
             ## Lumina Reminders — Automated Build
 
