@@ -73,17 +73,16 @@ jobs:
           flutter --version
           dart   --version
 
-      # 5 ── Patch Gradle wrapper to Groovy-3-compatible version ──────────────
-      # FIX: Gradle 8.8+ bundles Groovy 4.0 which removed groovy.xml.QName,
-      #      a class still imported by Flutter's flutter.groovy plugin.
-      #      Pinning to Gradle 8.7 (Groovy 3.x) resolves the compile error
-      #      without touching any project files.
-      - name: Patch Gradle wrapper (pin to 8.7)
+      # 5 ── Ensure Gradle wrapper meets AGP minimum version ──────────────────
+      # FIX: The Android Gradle Plugin in this project requires Gradle 9.1.0+.
+      #      Flutter 3.27+ ships a flutter.groovy compatible with Groovy 4.x,
+      #      so there is no longer any reason to stay below Gradle 8.8.
+      - name: Patch Gradle wrapper (pin to 9.1.0)
         run: |
           sed -i \
-            's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-all.zip|' \
+            's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-9.1.0-all.zip|' \
             android/gradle/wrapper/gradle-wrapper.properties
-          echo "Gradle wrapper pinned to 8.7:"
+          echo "Gradle wrapper pinned to 9.1.0:"
           cat android/gradle/wrapper/gradle-wrapper.properties
 
       # 6 ── Install pub dependencies ─────────────────────────────────────────
@@ -92,8 +91,8 @@ jobs:
 
       # 7 ── Run static analysis ──────────────────────────────────────────────
       - name: Analyze code
-        run: flutter analyze --no-fatal-infos
-        continue-on-error: true   # don't fail the build on lint warnings
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        continue-on-error: true   # don't fail the build on deprecation warnings
 
       # 8 ── Decode keystore from secret ──────────────────────────────────────
       - name: Decode keystore
