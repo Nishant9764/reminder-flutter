@@ -1,24 +1,24 @@
-// android/app/build.gradle
+// android/app/build.gradle.kts
 // ─────────────────────────────────────────────────────────────────────────────
-// Replace your existing android/app/build.gradle with this file.
-// Key addition: reads key.properties for release signing so the GitHub
-// Actions workflow can inject secrets without touching code.
+// Kotlin DSL version of the app-level build file.
+// FIX: Original file used Groovy DSL syntax (id "...", def, new Properties())
+//      inside a .kts file — those are incompatible. All declarations are now
+//      valid Kotlin DSL.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import java.util.Properties
+
 plugins {
-    id "com.android.application"
-    id "kotlin-android"
-    id "dev.flutter.flutter-gradle-plugin"
+    id("com.android.application")
+    id("kotlin-android")
+    id("dev.flutter.flutter-gradle-plugin")
 }
 
 // ── Read signing credentials from key.properties ─────────────────────────────
-def keyPropertiesFile = rootProject.file("key.properties")
-def keyProperties     = new Properties()
-
+val keyPropertiesFile = rootProject.file("key.properties")
+val keyProperties = Properties()
 if (keyPropertiesFile.exists()) {
-    keyPropertiesFile.withReader('UTF-8') { reader ->
-        keyProperties.load(reader)
-    }
+    keyPropertiesFile.inputStream().use { keyProperties.load(it) }
 }
 
 android {
@@ -27,58 +27,70 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = '17'
-    }
-
-    sourceSets {
-        main.java.srcDirs += 'src/main/kotlin'
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
         jvmTarget = "17"
     }
 
+    sourceSets {
+        getByName("main").java.srcDirs("src/main/kotlin")
+    }
+
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.reminder"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
-    buildTypes {
-        debug {
-            // Debug builds are auto-signed with the debug keystore
-            applicationIdSuffix ".debug"
-            versionNameSuffix   "-debug"
+    // ── Signing configs ───────────────────────────────────────────────────────
+    signingConfigs {
+        create("release") {
+            // Only configure if key.properties exists (i.e. CI has injected secrets)
+            if (keyPropertiesFile.exists()) {
+                storeFile     = file(keyProperties["storeFile"] as String)
+                storePassword = keyProperties["storePassword"] as String
+                keyAlias      = keyProperties["keyAlias"] as String
+                keyPassword   = keyProperties["keyPassword"] as String
+            }
         }
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+    }
+
+    buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix   = "-debug"
+            // Uses the default debug keystore automatically
+        }
+        getByName("release") {
+            // Use release signing if key.properties is present, else fall back
+            // to the debug keystore so local `flutter run --release` still works.
+            signingConfig = if (keyPropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+            isMinifyEnabled   = false
+            isShrinkResources = false
         }
     }
 }
 
 kotlin {
     compilerOptions {
-        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
 flutter {
-    source '../..'
+    source = "../.."
 }
 
 dependencies {
     // Required for minSdk < 21 multidex support
-    implementation 'androidx.multidex:multidex:2.0.1'
+    implementation("androidx.multidex:multidex:2.0.1")
 }
