@@ -63,7 +63,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.4'   # pin to a stable version
+          flutter-version: '3.27.4'
           channel:         stable
           cache:           true
 
@@ -73,22 +73,35 @@ jobs:
           flutter --version
           dart   --version
 
-      # 5 ── Install pub dependencies ─────────────────────────────────────────
+      # 5 ── Patch Gradle wrapper to Groovy-3-compatible version ──────────────
+      # FIX: Gradle 8.8+ bundles Groovy 4.0 which removed groovy.xml.QName,
+      #      a class still imported by Flutter's flutter.groovy plugin.
+      #      Pinning to Gradle 8.7 (Groovy 3.x) resolves the compile error
+      #      without touching any project files.
+      - name: Patch Gradle wrapper (pin to 8.7)
+        run: |
+          sed -i \
+            's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-all.zip|' \
+            android/gradle/wrapper/gradle-wrapper.properties
+          echo "Gradle wrapper pinned to 8.7:"
+          cat android/gradle/wrapper/gradle-wrapper.properties
+
+      # 6 ── Install pub dependencies ─────────────────────────────────────────
       - name: Install dependencies
         run: flutter pub get
 
-      # 6 ── Run static analysis ──────────────────────────────────────────────
+      # 7 ── Run static analysis ──────────────────────────────────────────────
       - name: Analyze code
         run: flutter analyze --no-fatal-infos
         continue-on-error: true   # don't fail the build on lint warnings
 
-      # 7 ── Decode keystore from secret ──────────────────────────────────────
+      # 8 ── Decode keystore from secret ──────────────────────────────────────
       - name: Decode keystore
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/lumina.jks
           echo "Keystore written to android/app/lumina.jks"
 
-      # 8 ── Write key.properties (read by android/app/build.gradle) ──────────
+      # 9 ── Write key.properties (read by android/app/build.gradle) ──────────
       - name: Create key.properties
         run: |
           cat > android/key.properties <<EOF
@@ -99,17 +112,17 @@ jobs:
           EOF
           echo "key.properties written"
 
-      # 9 ── Build release APK ────────────────────────────────────────────────
+      # 10 ── Build release APK ───────────────────────────────────────────────
       - name: Build release APK
         run: flutter build apk --release --split-per-abi
         # --split-per-abi produces 3 smaller APKs (arm32, arm64, x86_64)
         # instead of one fat APK. Remove the flag for a single universal APK.
 
-      # 10 ── List build outputs (useful for debugging path issues) ───────────
+      # 11 ── List build outputs (useful for debugging path issues) ──────────
       - name: List APK outputs
         run: find build/app/outputs/flutter-apk -name "*.apk" -type f
 
-      # 11 ── Upload APK as workflow artifact (always available) ──────────────
+      # 12 ── Upload APK as workflow artifact (always available) ─────────────
       - name: Upload APKs as artifact
         uses: actions/upload-artifact@v4
         with:
@@ -117,7 +130,7 @@ jobs:
           path:             build/app/outputs/flutter-apk/*.apk
           retention-days:   30
 
-      # 12 ── Compute release tag & name ──────────────────────────────────────
+      # 13 ── Compute release tag & name ─────────────────────────────────────
       # FIX: Moved ternary logic into a shell step to avoid YAML comment-char
       #      (#) and unclosed-expression errors in inline ${{ }} expressions.
       - name: Set release metadata
@@ -131,7 +144,7 @@ jobs:
             echo "release_name=Lumina Build ${{ github.run_number }}"     >> $GITHUB_OUTPUT
           fi
 
-      # 13 ── Create GitHub Release (only on version tags or main branch) ─────
+      # 14 ── Create GitHub Release (only on version tags or main branch) ─────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
@@ -173,7 +186,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0'
+          flutter-version: '3.27.4'
           channel:         stable
           cache:           true
 
