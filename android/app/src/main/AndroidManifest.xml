@@ -1,12 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  Lumina — AndroidManifest.xml                                ║
+  ║  Place at: android/app/src/main/AndroidManifest.xml          ║
+  ╚══════════════════════════════════════════════════════════════╝
+
+  Key additions vs default Flutter manifest:
+    1. POST_NOTIFICATIONS     — Android 13+ runtime notification permission
+    2. SCHEDULE_EXACT_ALARM   — Required for zonedSchedule (Android 12+)
+    3. USE_EXACT_ALARM         — Fallback for Android 13+ (no user prompt needed)
+    4. RECEIVE_BOOT_COMPLETED — Re-schedules notifications after device reboot
+    5. VIBRATE                — Allows notification vibration
+    6. ScheduledNotificationReceiver + ScheduledNotificationBootReceiver
+       from flutter_local_notifications plugin
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- ── Permissions ─────────────────────────────────────────────────── -->
+
+    <!-- Android 13+ (API 33): must request at runtime via the plugin -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Required to fire notifications at exact scheduled times -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+    <!-- Alternative exact-alarm permission for Android 13+ (no user dialog) -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- Re-schedule pending notifications when the device reboots -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Allow notification vibration -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Internet permission (for Google Fonts download in debug/profile) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- ── Application ─────────────────────────────────────────────────── -->
 
     <application
-        android:label="lumina_reminders"
+        android:label="Lumina"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true">
 
+        <!-- Main Flutter activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -18,27 +56,44 @@
             android:windowSoftInputMode="adjustResize">
 
             <meta-data
-              android:name="io.flutter.embedding.android.NormalTheme"
-              android:resource="@style/NormalTheme"
-            />
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
 
             <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
         </activity>
 
+        <!-- flutter_local_notifications: fires scheduled notifications -->
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+
+        <!-- flutter_local_notifications: re-schedules after device reboot -->
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Required for Flutter plugin registration -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
 
     </application>
 
+    <!-- Ensure the app targets current SDK behaviour -->
     <queries>
         <intent>
-            <action android:name="android.intent.action.PROCESS_TEXT"/>
-            <data android:mimeType="text/plain"/>
+            <action android:name="android.intent.action.PROCESS_TEXT" />
+            <data android:mimeType="text/plain" />
         </intent>
     </queries>
 
