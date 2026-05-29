@@ -30,6 +30,7 @@ android {
     ndkVersion = "28.2.13676358"
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true   // required by flutter_local_notifications
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -95,6 +96,11 @@ flutter {
 }
 
 dependencies {
-    // Required for minSdk < 21 multidex support
+    // Core library desugaring — backports java.time.* to API < 26.
+    // Required by flutter_local_notifications; must pair with
+    // isCoreLibraryDesugaringEnabled = true in compileOptions above.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
+    // Multidex support (kept for safety even though minSdk = 21)
     implementation("androidx.multidex:multidex:2.0.1")
 }
