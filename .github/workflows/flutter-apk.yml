@@ -96,6 +96,16 @@ jobs:
           echo "Gradle wrapper:"
           cat "$WFILE"
 
+      # ── Upgrade flutter_timezone ──────────────────────────────────────────
+      # flutter_timezone 1.0.8 uses PluginRegistry.Registrar (Flutter v1
+      # embedding API) which was fully removed. v3+ uses the current v2 API.
+      # Patching pubspec.yaml on the runner; your local file is untouched.
+      - name: Upgrade flutter_timezone to v3
+        run: |
+          sed -i 's/flutter_timezone:.*$/flutter_timezone: ^3.0.0/' pubspec.yaml
+          echo "flutter_timezone line after patch:"
+          grep flutter_timezone pubspec.yaml
+
       - name: Install dependencies
         run: flutter pub get
 
