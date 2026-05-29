@@ -79,7 +79,7 @@ jobs:
               }
           }
           GROOVY
-          echo "JVM alignment block appended to android/build.gradle""
+          echo "JVM alignment block appended to android/build.gradle"
 
       - name: Install dependencies
         run: flutter pub get
