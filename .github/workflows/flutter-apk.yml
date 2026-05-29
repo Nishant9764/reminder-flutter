@@ -116,9 +116,31 @@ jobs:
 
       # 8 ── Decode keystore from secret ──────────────────────────────────────
       - name: Decode keystore
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          printf '%s' "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/lumina.jks
-          echo "Keystore decoded — size: $(wc -c < android/app/lumina.jks) bytes"
+          # ── Validate the secret is present ───────────────────────────────
+          if [ -z "$KS_B64" ]; then
+            echo "::error::KEYSTORE_BASE64 secret is empty or not set."
+            echo "To fix:"
+            echo "  macOS:  base64 -i lumina.jks | pbcopy   → paste into secret"
+            echo "  Linux:  base64 -w 0 lumina.jks           → copy into secret"
+            exit 1
+          fi
+
+          # ── Decode (strip whitespace first for safety) ────────────────────
+          printf '%s' "$KS_B64" | tr -d '[:space:]' | base64 --decode > android/app/lumina.jks
+
+          # ── Validate output is non-empty ──────────────────────────────────
+          BYTES=$(wc -c < android/app/lumina.jks)
+          if [ "$BYTES" -eq 0 ]; then
+            echo "::error::Keystore decoded to 0 bytes — base64 string is malformed."
+            exit 1
+          fi
+          echo "Keystore decoded successfully: $BYTES bytes"
+
+          # ── Show keystore type so we can confirm it is readable ───────────
+          file android/app/lumina.jks || true
 
       # Convert keystore to legacy PKCS12 so AGP can read it.
       # Java 17 writes PKCS12 with AES-256+PBKDF2 by default; the Android
