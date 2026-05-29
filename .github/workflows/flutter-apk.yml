@@ -117,8 +117,27 @@ jobs:
       # 8 ── Decode keystore from secret ──────────────────────────────────────
       - name: Decode keystore
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/lumina.jks
-          echo "Keystore written to android/app/lumina.jks"
+          printf '%s' "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/lumina.jks
+          echo "Keystore decoded — size: $(wc -c < android/app/lumina.jks) bytes"
+
+      # Convert keystore to legacy PKCS12 so AGP can read it.
+      # Java 17 writes PKCS12 with AES-256+PBKDF2 by default; the Android
+      # signing tools only understand the old 3DES PKCS12 ("Tag > 30" error).
+      # -J-Dkeystore.pkcs12.legacy rewrites with 3DES / SHA-1 MAC.
+      - name: Convert keystore to legacy PKCS12 (AGP-compatible)
+        env:
+          STORE_PASS: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          keytool -importkeystore \
+            -srckeystore   android/app/lumina.jks \
+            -srcstorepass  "$STORE_PASS" \
+            -destkeystore  android/app/lumina_compat.jks \
+            -deststoretype PKCS12 \
+            -deststorepass "$STORE_PASS" \
+            -noprompt \
+            -J-Dkeystore.pkcs12.legacy 2>&1
+          mv android/app/lumina_compat.jks android/app/lumina.jks
+          echo "Converted — size: $(wc -c < android/app/lumina.jks) bytes"
 
       # 9 ── Write key.properties (read by android/app/build.gradle) ──────────
       - name: Create key.properties
