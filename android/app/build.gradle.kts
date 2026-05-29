@@ -14,7 +14,7 @@ val keyProperties = Properties().apply {
 }
 
 android {
-    namespace  = "com.example.reminder"
+    namespace  = "com.example.lumina_reminders"
     compileSdk = flutter.compileSdkVersion
 
     // Plugins require NDK 28.2.13676358 minimum (flutter_local_notifications,
@@ -28,7 +28,7 @@ android {
     }
 
     defaultConfig {
-        applicationId   = "com.example.reminder"
+        applicationId   = "com.example.lumina_reminders"
         minSdk          = 21   // flutter_local_notifications requires API 21+
         targetSdk       = flutter.targetSdkVersion
         versionCode     = flutter.versionCode
