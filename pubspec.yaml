@@ -18,18 +18,18 @@ dependencies:
 
   # Timezone support for scheduled notifications
   timezone: ^0.9.4
-  flutter_timezone: ^1.0.8
+  flutter_timezone: ^3.0.0   # upgraded from 1.0.8 — v1 used removed Flutter v1 embedding API
 
-  # Persistent key-value storage (localStorage equivalent)
+  # Persistent key-value storage
   shared_preferences: ^2.3.2
 
   # UUID generation
   uuid: ^4.5.1
 
-  # Typography: Syne (brand) + DM Sans (body)
+  # Typography
   google_fonts: ^6.2.1
 
-  # Date/time formatting utilities
+  # Date/time formatting
   intl: ^0.19.0
 
 dev_dependencies:
