@@ -114,20 +114,35 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
         continue-on-error: true   # don't fail the build on deprecation warnings
 
-      # 8 ── Decode keystore from secret ──────────────────────────────────────
-      - name: Decode keystore
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/lumina.jks
-          echo "Keystore decoded: $(wc -c < android/app/lumina.jks) bytes"
-
-      # Convert keystore to legacy PKCS12 so AGP can read it.
-      # Java 17 writes PKCS12 with AES-256+PBKDF2 by default; the Android
-      # signing tools only understand the old 3DES PKCS12 ("Tag > 30" error).
-      # -J-Dkeystore.pkcs12.legacy rewrites with 3DES / SHA-1 MAC.
-      - name: Convert keystore to legacy PKCS12 (AGP-compatible)
+      # 8 ── Keystore: decode → convert → write key.properties ────────────────
+      # All three sub-steps are skipped when KEYSTORE_BASE64 is not set.
+      # build.gradle.kts falls back to the debug keystore automatically,
+      # so the build still succeeds and produces a (debug-signed) APK.
+      # To enable release signing: add the four secrets documented at the top
+      # of this file to Settings → Secrets and variables → Actions.
+      - name: Setup release signing (skipped if secrets not set)
         env:
-          STORE_PASS: ${{ secrets.STORE_PASSWORD }}
+          KS_B64:        ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASS:    ${{ secrets.STORE_PASSWORD }}
+          KEY_PASS:      ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS:     ${{ secrets.KEY_ALIAS }}
         run: |
+          if [ -z "$KS_B64" ]; then
+            echo "KEYSTORE_BASE64 not set — using debug keystore (APK will be debug-signed)"
+            exit 0
+          fi
+
+          # ── 1. Decode ────────────────────────────────────────────────────
+          echo "$KS_B64" | base64 --decode > android/app/lumina.jks
+          BYTES=$(wc -c < android/app/lumina.jks)
+          echo "Keystore decoded: $BYTES bytes"
+          if [ "$BYTES" -eq 0 ]; then
+            echo "ERROR: decoded keystore is empty — check KEYSTORE_BASE64 secret"
+            exit 1
+          fi
+
+          # ── 2. Convert to legacy PKCS12 (Java 17 writes AES-256 by default;
+          #       AGP signing tools only read the old 3DES format) ──────────
           keytool -importkeystore \
             -srckeystore   android/app/lumina.jks \
             -srcstorepass  "$STORE_PASS" \
@@ -137,17 +152,17 @@ jobs:
             -noprompt \
             -J-Dkeystore.pkcs12.legacy 2>&1
           mv android/app/lumina_compat.jks android/app/lumina.jks
-          echo "Converted — size: $(wc -c < android/app/lumina.jks) bytes"
+          echo "Keystore converted to legacy PKCS12: $(wc -c < android/app/lumina.jks) bytes"
 
-      # 9 ── Write key.properties (read by android/app/build.gradle) ──────────
-      - name: Create key.properties
-        run: |
-          cat > android/key.properties <<EOF
-          storePassword=${{ secrets.STORE_PASSWORD }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
-          storeFile=lumina.jks
-          EOF
+          # ── 3. Write key.properties ──────────────────────────────────────
+          printf 'storeFile=lumina.jks
+'       >  android/key.properties
+          printf 'storePassword=%s
+' "$STORE_PASS" >> android/key.properties
+          printf 'keyAlias=%s
+'      "$KEY_ALIAS"  >> android/key.properties
+          printf 'keyPassword=%s
+'   "$KEY_PASS"   >> android/key.properties
           echo "key.properties written"
 
       # 10 ── Build release APK ───────────────────────────────────────────────
