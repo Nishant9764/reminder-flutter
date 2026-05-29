@@ -47,25 +47,9 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.2'
+          flutter-version: '3.44.0'
           channel: stable
           cache: true
-
-      # AGP 9.0.1 needs Gradle 9.1+ but Flutter 3.29.2 breaks on Gradle 9.
-      # Downgrade AGP → 8.7.0 and Kotlin → 2.1.0 so Gradle 8.11.1 works for all.
-      - name: Patch AGP and Kotlin versions
-        run: |
-          sed -i 's|id("com.android.application") version "[^"]*"|id("com.android.application") version "8.7.0"|' android/settings.gradle.kts
-          sed -i 's|id("org.jetbrains.kotlin.android") version "[^"]*"|id("org.jetbrains.kotlin.android") version "2.1.0"|' android/settings.gradle.kts
-          echo "Patched settings.gradle.kts:"
-          grep -E 'com.android.application|kotlin.android' android/settings.gradle.kts
-
-      - name: Pin Gradle to 8.11.1
-        run: |
-          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-all.zip|' \
-            android/gradle/wrapper/gradle-wrapper.properties
-          echo "Gradle wrapper:"
-          cat android/gradle/wrapper/gradle-wrapper.properties
 
       # flutter_timezone 1.x uses removed Flutter v1 embedding API (Registrar).
       - name: Upgrade flutter_timezone to v3
@@ -178,7 +162,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.2'
+          flutter-version: '3.44.0'
           channel: stable
           cache: true
       - run: flutter pub get
