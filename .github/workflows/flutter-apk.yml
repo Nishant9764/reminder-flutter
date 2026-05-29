@@ -57,31 +57,29 @@ jobs:
           sed -i 's/flutter_timezone:.*$/flutter_timezone: ^3.0.0/' pubspec.yaml
           grep flutter_timezone pubspec.yaml
 
-      # Force JVM 17 across all plugin subprojects.
-      # flutter_timezone (and others) default to Java 11 + Kotlin 1.8 which
-      # causes "Inconsistent JVM-target compatibility" with AGP 9 + Gradle 9.
+      # Force JVM 17 for both Java and Kotlin across all plugin subprojects.
+      # Previous approach used hasProperty("android") which doesn't match
+      # flutter_timezone — it left JavaCompile at 11 while KotlinCompile
+      # was 17 → "Inconsistent JVM-target compatibility" error.
+      # Fix: target JavaCompile and KotlinCompile tasks directly.
       - name: Align JVM targets for all subprojects
         run: |
           cat >> android/build.gradle << 'GROOVY'
 
-          // Appended by CI: force consistent JVM 17 across all plugin subprojects.
+          // Appended by CI: force JVM 17 for Java + Kotlin in all plugin subprojects.
           subprojects {
               afterEvaluate {
+                  tasks.withType(JavaCompile).configureEach {
+                      sourceCompatibility = JavaVersion.VERSION_17
+                      targetCompatibility = JavaVersion.VERSION_17
+                  }
                   tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
                       kotlinOptions { jvmTarget = "17" }
-                  }
-                  if (hasProperty("android")) {
-                      android {
-                          compileOptions {
-                              sourceCompatibility JavaVersion.VERSION_17
-                              targetCompatibility JavaVersion.VERSION_17
-                          }
-                      }
                   }
               }
           }
           GROOVY
-          echo "Appended JVM alignment block to android/build.gradle"
+          echo "JVM alignment block appended to android/build.gradle""
 
       - name: Install dependencies
         run: flutter pub get
