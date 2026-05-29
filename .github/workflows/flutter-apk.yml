@@ -1,57 +1,44 @@
 # ╔══════════════════════════════════════════════════════════════════════╗
 # ║  .github/workflows/build_apk.yml                                     ║
-# ║  Builds a signed release APK on every push to main / on manual       ║
-# ║  trigger, and attaches it to a GitHub Release automatically.          ║
+# ║  Builds a signed release APK on every push to main / manual trigger  ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 #
-# ── Required GitHub Secrets ───────────────────────────────────────────────────
-#   KEYSTORE_BASE64   →  base64-encoded JKS keystore file
-#                        Generate: keytool -genkey -v -keystore lumina.jks \
-#                          -keyalg RSA -keysize 2048 -validity 10000 \
-#                          -alias lumina
-#                        Encode:   base64 -i lumina.jks | pbcopy   (macOS)
-#                                  base64 lumina.jks               (Linux)
-#
-#   KEY_ALIAS         →  The alias used above (e.g.  lumina)
-#   KEY_PASSWORD      →  Password for the key alias
-#   STORE_PASSWORD    →  Password for the keystore file
-#
-# How to add secrets:
-#   GitHub repo → Settings → Secrets and variables → Actions → New repository secret
-# ─────────────────────────────────────────────────────────────────────────────
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   KEYSTORE_BASE64  →  base64 of your .jks file
+#   KEY_ALIAS        →  alias used when creating the keystore  (e.g. lumina)
+#   KEY_PASSWORD     →  alias password
+#   STORE_PASSWORD   →  keystore password
 
 name: Build & Release APK
 
 on:
   push:
-    branches: [ main, master ]
-    tags:
-      - 'v*'          # trigger on version tags like v1.0.0
-
-  workflow_dispatch:  # manual trigger from GitHub Actions UI
+    branches: [main, master]
+    tags:     ['v*']
+  workflow_dispatch:
     inputs:
       release_notes:
-        description: 'What changed in this build?'
+        description: 'Release notes'
         required: false
         default:  'New build'
 
-# ── Concurrency: cancel any in-progress run for the same branch ───────────────
 concurrency:
   group:              ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ════════════════════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════════════
   build:
     name:    Build Signed APK
     runs-on: ubuntu-latest
 
     steps:
-      # 1 ── Checkout source code ─────────────────────────────────────────────
-      - name: Checkout repository
+      # ── 1. Checkout ──────────────────────────────────────────────────
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2 ── Set up Java 17 (required by Android Gradle Plugin 8+) ────────────
+      # ── 2. Java 17 ───────────────────────────────────────────────────
+      #   Required by Android Gradle Plugin 8+ and our jvmToolchain(17).
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -59,7 +46,7 @@ jobs:
           java-version: '17'
           cache:        gradle
 
-      # 3 ── Set up Flutter (stable channel) ──────────────────────────────────
+      # ── 3. Flutter ───────────────────────────────────────────────────
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -67,174 +54,177 @@ jobs:
           channel:         stable
           cache:           true
 
-      # 4 ── Print versions for debugging ─────────────────────────────────────
-      - name: Flutter & Dart versions
+      # ── 4. Version info ──────────────────────────────────────────────
+      - name: Print versions
         run: |
           flutter --version
-          dart   --version
+          dart    --version
+          java    -version
 
-      # 5 ── Patch flutter.groovy for full Groovy 4.x / Gradle 9+ compatibility ─
-      # ROOT CAUSE: AGP in this project requires Gradle 9.1.0+ → Groovy 4.x.
-      #   Flutter 3.27.4's flutter.groovy was written for Groovy 3.x and has
-      #   three categories of breakage in Groovy 4:
-      #   (a) groovy.xml.QName was deleted → replaced by javax.xml.namespace.QName
-      #   (b) XmlParser / XmlSlurper / MarkupBuilder moved from groovy.util.*
-      #       (auto-imported in Groovy 3) to groovy.xml.* (not auto-imported)
-      #   Fixing them one at a time re-compiles and surfaces the next error.
-      #   This step patches all known breakage points in a single Python pass.
-      - name: Patch flutter.groovy (full Groovy 4.x compatibility)
+      # ── 5. Groovy 4.x / Gradle 9+ compatibility patch ────────────────
+      #   Flutter's flutter.groovy uses groovy.xml.QName (deleted in
+      #   Groovy 4) and groovy.util.* classes (moved to groovy.xml.*).
+      #   This one-shot Python patch fixes all known breakage points.
+      #   Safe no-op if the file is not found or already patched.
+      - name: Patch flutter.groovy for Groovy 4.x / Gradle 9+
         run: |
-          FLUTTER_GROOVY=$(find "$FLUTTER_ROOT" -name "flutter.groovy" 2>/dev/null | head -1)
-          if [ -n "$FLUTTER_GROOVY" ]; then
-            python3 - "$FLUTTER_GROOVY" <<'PYEOF'
-import sys
+          GROOVY_FILE=$(find "$FLUTTER_ROOT" -name "flutter.groovy" 2>/dev/null | head -1)
+          if [ -z "$GROOVY_FILE" ]; then
+            echo "flutter.groovy not found — skipping patch (probably already fixed in this Flutter release)"
+            exit 0
+          fi
+          echo "Patching: $GROOVY_FILE"
+          python3 << PYEOF
+import sys, re
 
-path = sys.argv[1]
-with open(path) as f:
-    src = f.read()
+path = "$GROOVY_FILE"
+with open(path) as fh:
+    src = fh.read()
 
-# Fix (a): groovy.xml.QName removed in Groovy 4 — use the Java standard class
-src = src.replace('import groovy.xml.QName', 'import javax.xml.namespace.QName')
+original = src
 
-# Fix (b): XmlParser / XmlSlurper / MarkupBuilder are in groovy.xml.* in
-# Groovy 4 but that package is NOT auto-imported, so add explicit imports.
-to_add = [
+# ── Fix 1: groovy.xml.QName was deleted in Groovy 4; use JDK standard ──
+src = src.replace(
+    'import groovy.xml.QName',
+    'import javax.xml.namespace.QName'
+)
+
+# ── Fix 2: groovy.util.* moved to groovy.xml.* in Groovy 4 ─────────────
+#   These classes are no longer auto-imported; add explicit imports.
+needs = [
     'import groovy.xml.XmlParser',
     'import groovy.xml.XmlSlurper',
     'import groovy.xml.MarkupBuilder',
 ]
 lines = src.splitlines()
 last_import = max(
-    (i for i, l in enumerate(lines) if l.startswith('import ')), default=0
+    (i for i, l in enumerate(lines) if l.startswith('import ')),
+    default=0
 )
-for imp in reversed(to_add):
+inserted = 0
+for imp in reversed(needs):
     if imp not in src:
         lines.insert(last_import + 1, imp)
+        inserted += 1
+
 src = '\n'.join(lines)
+with open(path, 'w') as fh:
+    fh.write(src)
 
-with open(path, 'w') as f:
-    f.write(src)
-
-print('Patched:', path)
-print('--- resulting imports ---')
-for l in src.splitlines():
-    if l.startswith('import '):
-        print(l)
+if src != original:
+    print(f"Patched {inserted + (1 if 'javax.xml' in src else 0)} item(s) in {path}")
+else:
+    print("No changes needed — file already compatible with Groovy 4.x")
 PYEOF
-          else
-            echo "flutter.groovy not found — may already be fixed in this Flutter version"
-          fi
 
-      # 6 ── Install pub dependencies ─────────────────────────────────────────
-      - name: Install dependencies
+      # ── 6. Install pub packages ──────────────────────────────────────
+      - name: flutter pub get
         run: flutter pub get
 
-      # 7 ── Run static analysis ──────────────────────────────────────────────
-      - name: Analyze code
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
-        continue-on-error: true   # don't fail the build on deprecation warnings
-
-      # 8 ── Decode keystore from secret ──────────────────────────────────────
+      # ── 7. Decode keystore ───────────────────────────────────────────
+      #   The secret is the raw base64 of your .jks file.
+      #   Written to android/app/lumina.jks — matches storeFile in
+      #   key.properties and the file() path in build.gradle.kts.
       - name: Decode keystore
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/lumina.jks
-          echo "Keystore written to android/app/lumina.jks"
+          printf '%s' "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode \
+            > android/app/lumina.jks
+          echo "Keystore size: $(wc -c < android/app/lumina.jks) bytes"
 
-      # 9 ── Write key.properties (read by android/app/build.gradle) ──────────
-      - name: Create key.properties
+      # ── 8. Write key.properties ──────────────────────────────────────
+      #   Written to android/key.properties (one level above app/).
+      #   rootProject.file("key.properties") in build.gradle.kts
+      #   resolves to this exact path.
+      #   Uses printf to write each line individually — avoids any
+      #   whitespace / heredoc indentation ambiguity.
+      - name: Write key.properties
         run: |
-          cat > android/key.properties <<EOF
-          storePassword=${{ secrets.STORE_PASSWORD }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
-          storeFile=lumina.jks
-          EOF
-          echo "key.properties written"
+          printf 'storeFile=lumina.jks\n'                             > android/key.properties
+          printf 'storePassword=%s\n' "${{ secrets.STORE_PASSWORD }}" >> android/key.properties
+          printf 'keyAlias=%s\n'      "${{ secrets.KEY_ALIAS }}"      >> android/key.properties
+          printf 'keyPassword=%s\n'   "${{ secrets.KEY_PASSWORD }}"   >> android/key.properties
+          echo "key.properties contents (passwords masked):"
+          sed 's/=.*/=***/' android/key.properties
 
-      # 10 ── Build release APK ───────────────────────────────────────────────
+      # ── 9. Build release APK ─────────────────────────────────────────
+      #   --split-per-abi → 3 lean APKs instead of one fat universal.
+      #   Remove the flag if you want a single universal APK.
       - name: Build release APK
         run: flutter build apk --release --split-per-abi
-        # --split-per-abi produces 3 smaller APKs (arm32, arm64, x86_64)
-        # instead of one fat APK. Remove the flag for a single universal APK.
 
-      # 11 ── List build outputs (useful for debugging path issues) ──────────
-      - name: List APK outputs
-        run: find build/app/outputs/flutter-apk -name "*.apk" -type f
+      # ── 10. List outputs ─────────────────────────────────────────────
+      - name: List APKs
+        run: find build/app/outputs/flutter-apk -name "*.apk" | sort
 
-      # 12 ── Upload APK as workflow artifact (always available) ─────────────
+      # ── 11. Upload artifact ──────────────────────────────────────────
       - name: Upload APKs as artifact
         uses: actions/upload-artifact@v4
         with:
-          name:             lumina-apk-${{ github.sha }}
-          path:             build/app/outputs/flutter-apk/*.apk
-          retention-days:   30
+          name:           lumina-apk-${{ github.run_number }}
+          path:           build/app/outputs/flutter-apk/*.apk
+          retention-days: 30
 
-      # 13 ── Compute release tag & name ─────────────────────────────────────
-      # FIX: Moved ternary logic into a shell step to avoid YAML comment-char
-      #      (#) and unclosed-expression errors in inline ${{ }} expressions.
+      # ── 12. Compute tag / release name ───────────────────────────────
+      #   Shell step avoids inline ternary expressions in ${{ }} which
+      #   break YAML parsing when they contain '#' or unbalanced braces.
       - name: Set release metadata
-        id: meta
+        id:   meta
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "tag_name=${{ github.ref_name }}"             >> $GITHUB_OUTPUT
-            echo "release_name=Lumina ${{ github.ref_name }}"  >> $GITHUB_OUTPUT
+            echo "tag=${{ github.ref_name }}"                        >> "$GITHUB_OUTPUT"
+            echo "title=Lumina ${{ github.ref_name }}"               >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"                                   >> "$GITHUB_OUTPUT"
           else
-            echo "tag_name=build-${{ github.run_number }}"                >> $GITHUB_OUTPUT
-            echo "release_name=Lumina Build ${{ github.run_number }}"     >> $GITHUB_OUTPUT
+            echo "tag=build-${{ github.run_number }}"                >> "$GITHUB_OUTPUT"
+            echo "title=Lumina — Build #${{ github.run_number }}"    >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"                                    >> "$GITHUB_OUTPUT"
           fi
 
-      # 14 ── Create GitHub Release (only on version tags or main branch) ─────
+      # ── 13. Create GitHub Release ────────────────────────────────────
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: >
+          startsWith(github.ref, 'refs/tags/v') ||
+          github.ref == 'refs/heads/main'        ||
+          github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag_name }}
-          name:     ${{ steps.meta.outputs.release_name }}
+          tag_name:   ${{ steps.meta.outputs.tag }}
+          name:       ${{ steps.meta.outputs.title }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
           body: |
-            ## Lumina Reminders — Automated Build
+            ## Lumina Reminders
 
             **Commit:** `${{ github.sha }}`
-            **Branch:**  ${{ github.ref_name }}
-            **Built at:** ${{ github.event.head_commit.timestamp }}
+            **Branch:** ${{ github.ref_name }}
+            **Build:**  #${{ github.run_number }}
 
             ${{ github.event.inputs.release_notes || github.event.head_commit.message }}
 
             ---
-            ### APK Downloads
-            | File | Architecture |
-            |------|-------------|
-            | `app-arm64-v8a-release.apk`  | 64-bit ARM  (most modern phones) |
-            | `app-armeabi-v7a-release.apk`| 32-bit ARM  (older phones)       |
-            | `app-x86_64-release.apk`     | 64-bit x86  (emulators)          |
-
-            > **Install tip:** Download the `arm64-v8a` APK for any phone made after 2017.
+            | APK file | Device |
+            |---|---|
+            | `app-arm64-v8a-release.apk`   | 64-bit ARM — all phones after 2017 ✅ |
+            | `app-armeabi-v7a-release.apk` | 32-bit ARM — older phones |
+            | `app-x86_64-release.apk`      | x86_64 — emulators only |
           files: build/app/outputs/flutter-apk/*.apk
-          draft:      false
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ════════════════════════════════════════════════════════════════════════════
-  # Optional: run Flutter unit tests before building
+  # ══════════════════════════════════════════════════════════════════════
   test:
     name:    Run Tests
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.27.4'
           channel:         stable
           cache:           true
-
-      - name: Install dependencies
-        run: flutter pub get
-
+      - run: flutter pub get
       - name: Run tests
         run: |
-          if [ -d "test" ] && [ -n "$(find test -name '*_test.dart' 2>/dev/null)" ]; then
+          if find test -name '*_test.dart' 2>/dev/null | grep -q .; then
             flutter test --reporter compact
           else
             echo "No test files found — skipping."
