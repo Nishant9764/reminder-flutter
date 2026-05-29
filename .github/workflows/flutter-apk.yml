@@ -63,7 +63,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.32.0'
+          flutter-version: '3.29.2'
           channel:         stable
           cache:           true
 
@@ -72,6 +72,29 @@ jobs:
         run: |
           flutter --version
           dart   --version
+
+      # ── Patch android/settings.gradle.kts ────────────────────────────────
+      # AGP 9.0.1 requires Gradle 9.1.0+, but Flutter 3.29.2's Kotlin Gradle
+      # plugin uses APIs removed in Gradle 9 (fileMode, String.toLowerCase).
+      # Downgrading AGP → 8.7.0 and Kotlin → 2.1.0 lets us stay on Gradle
+      # 8.11.1 where everything is compatible. Changes are runner-only.
+      - name: Patch settings.gradle.kts (AGP 8.7.0 + Kotlin 2.1.0)
+        run: |
+          SFILE="android/settings.gradle.kts"
+          sed -i 's|id("com.android.application") version "[^"]*"|id("com.android.application") version "8.7.0"|g' "$SFILE"
+          sed -i 's|id("org.jetbrains.kotlin.android") version "[^"]*"|id("org.jetbrains.kotlin.android") version "2.1.0"|g' "$SFILE"
+          echo "Patched $SFILE:"
+          grep 'com.android.application\|kotlin.android' "$SFILE"
+
+      # ── Pin Gradle wrapper to 8.11.1 ─────────────────────────────────────
+      # AGP 8.7.0 minimum is Gradle 8.9. 8.11.1 is the latest stable 8.x
+      # release — stays below Gradle 9 where Flutter's plugin breaks.
+      - name: Patch gradle-wrapper.properties (Gradle 8.11.1)
+        run: |
+          WFILE="android/gradle/wrapper/gradle-wrapper.properties"
+          sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-all.zip|' "$WFILE"
+          echo "Gradle wrapper:"
+          cat "$WFILE"
 
       - name: Install dependencies
         run: flutter pub get
@@ -172,9 +195,10 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.32.0'
+          flutter-version: '3.29.2'
           channel:         stable
           cache:           true
+
 
       - name: Install dependencies
         run: flutter pub get
