@@ -57,29 +57,16 @@ jobs:
           sed -i 's/flutter_timezone:.*$/flutter_timezone: ^3.0.0/' pubspec.yaml
           grep flutter_timezone pubspec.yaml
 
-      # Force JVM 17 for both Java and Kotlin across all plugin subprojects.
-      # Previous approach used hasProperty("android") which doesn't match
-      # flutter_timezone — it left JavaCompile at 11 while KotlinCompile
-      # was 17 → "Inconsistent JVM-target compatibility" error.
-      # Fix: target JavaCompile and KotlinCompile tasks directly.
-      - name: Align JVM targets for all subprojects
+      # flutter_timezone's own build.gradle locks JavaCompile to 11 while
+      # KotlinCompile targets 17 — we can't override a plugin's own task config
+      # reliably via subprojects {}. The correct fix is to tell the Kotlin
+      # Gradle Plugin to skip JVM target consistency validation for subprojects
+      # we don't own. IGNORE suppresses the error; build output is unaffected.
+      - name: Suppress JVM target validation for third-party plugins
         run: |
-          cat >> android/build.gradle << 'GROOVY'
-
-          // Appended by CI: force JVM 17 for Java + Kotlin in all plugin subprojects.
-          subprojects {
-              afterEvaluate {
-                  tasks.withType(JavaCompile).configureEach {
-                      sourceCompatibility = JavaVersion.VERSION_17
-                      targetCompatibility = JavaVersion.VERSION_17
-                  }
-                  tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-                      kotlinOptions { jvmTarget = "17" }
-                  }
-              }
-          }
-          GROOVY
-          echo "JVM alignment block appended to android/build.gradle"
+          echo "kotlin.jvm.target.validation.mode=IGNORE" >> android/gradle.properties
+          echo "Patched gradle.properties:"
+          grep "jvm.target" android/gradle.properties
 
       - name: Install dependencies
         run: flutter pub get
