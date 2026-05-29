@@ -1,232 +1,211 @@
 # ╔══════════════════════════════════════════════════════════════════════╗
-# ║  .github/workflows/build_apk.yml                                     ║
+# ║  .github/workflows/build_apk.yml  (flutter-apk.yml)                 ║
 # ║  Builds a signed release APK on every push to main / manual trigger  ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 #
-# Required GitHub Secrets (Settings → Secrets → Actions):
-#   KEYSTORE_BASE64  →  base64 of your .jks file
-#   KEY_ALIAS        →  alias used when creating the keystore  (e.g. lumina)
-#   KEY_PASSWORD     →  alias password
-#   STORE_PASSWORD   →  keystore password
+# Required GitHub Secrets  (Settings → Secrets → Actions → New):
+#   KEYSTORE_BASE64  → base64 of your .jks keystore file
+#   KEY_ALIAS        → alias used when creating the keystore (e.g. lumina)
+#   KEY_PASSWORD     → alias password
+#   STORE_PASSWORD   → keystore file password
 
 name: Build & Release APK
 
 on:
   push:
     branches: [main, master]
-    tags:     ['v*']
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       release_notes:
         description: 'Release notes'
         required: false
-        default:  'New build'
+        default: 'New build'
 
 concurrency:
-  group:              ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ══════════════════════════════════════════════════════════════════════
+
+  # ════════════════════════════════════════════════════════════════════
   build:
-    name:    Build Signed APK
+    name: Build Signed APK
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Checkout ──────────────────────────────────────────────────
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 2. Java 17 ───────────────────────────────────────────────────
-      #   Required by Android Gradle Plugin 8+ and our jvmToolchain(17).
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache:        gradle
+          cache: gradle
 
-      # ── 3. Flutter ───────────────────────────────────────────────────
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.27.4'
-          channel:         stable
-          cache:           true
+          channel: stable
+          cache: true
 
-      # ── 4. Version info ──────────────────────────────────────────────
       - name: Print versions
         run: |
           flutter --version
-          dart    --version
-          java    -version
+          dart --version
+          java -version
 
-      # ── 5. Groovy 4.x / Gradle 9+ compatibility patch ────────────────
-      #   Flutter's flutter.groovy uses groovy.xml.QName (deleted in
-      #   Groovy 4) and groovy.util.* classes (moved to groovy.xml.*).
-      #   This one-shot Python patch fixes all known breakage points.
-      #   Safe no-op if the file is not found or already patched.
+      # ── Groovy 4.x / Gradle 9+ patch ─────────────────────────────────
+      # ROOT CAUSE of the previous YAML error:
+      #   The old step embedded a Python script via "python3 << PYEOF".
+      #   YAML block scalars (run: |) lock onto the indentation of the first
+      #   content line (~10 spaces). The Python code inside the heredoc was
+      #   at 0 spaces — YAML ended the block and tried to parse "import sys"
+      #   as a new YAML node → "syntax error on line 78".
+      #
+      # FIX: replaced with sed + awk which stay inside the run: | block
+      #      at the correct indentation level. No heredoc, no Python needed.
       - name: Patch flutter.groovy for Groovy 4.x / Gradle 9+
         run: |
-          GROOVY_FILE=$(find "$FLUTTER_ROOT" -name "flutter.groovy" 2>/dev/null | head -1)
-          if [ -z "$GROOVY_FILE" ]; then
-            echo "flutter.groovy not found — skipping patch (probably already fixed in this Flutter release)"
+          GFILE=$(find "$FLUTTER_ROOT" -name "flutter.groovy" 2>/dev/null | head -1)
+          if [ -z "$GFILE" ]; then
+            echo "flutter.groovy not found — skipping (not needed for Gradle 8.x)"
             exit 0
           fi
-          echo "Patching: $GROOVY_FILE"
-          python3 << PYEOF
-import sys, re
+          echo "Found: $GFILE"
 
-path = "$GROOVY_FILE"
-with open(path) as fh:
-    src = fh.read()
+          # Fix 1 — groovy.xml.QName was deleted in Groovy 4.
+          #          Replace with the equivalent JDK standard class.
+          sed -i 's|import groovy\.xml\.QName|import javax.xml.namespace.QName|g' "$GFILE"
 
-original = src
+          # Fix 2 — XmlParser / XmlSlurper / MarkupBuilder moved from
+          #          groovy.util.* (auto-imported in Groovy 3) to groovy.xml.*
+          #          (not auto-imported in Groovy 4). Insert explicit imports
+          #          directly after the last existing import line using awk.
+          awk -v patched=0 '
+            /^import groovy\.xml\.XmlParser/ { patched = 1 }
+            /^import / { lastline = NR }
+            { lines[NR] = $0 }
+            END {
+              for (i = 1; i <= NR; i++) {
+                print lines[i]
+                if (i == lastline && patched == 0) {
+                  print "import groovy.xml.XmlParser"
+                  print "import groovy.xml.XmlSlurper"
+                  print "import groovy.xml.MarkupBuilder"
+                }
+              }
+            }
+          ' "$GFILE" > /tmp/flutter_groovy_fixed && mv /tmp/flutter_groovy_fixed "$GFILE"
 
-# ── Fix 1: groovy.xml.QName was deleted in Groovy 4; use JDK standard ──
-src = src.replace(
-    'import groovy.xml.QName',
-    'import javax.xml.namespace.QName'
-)
+          echo "Patch applied: $GFILE"
 
-# ── Fix 2: groovy.util.* moved to groovy.xml.* in Groovy 4 ─────────────
-#   These classes are no longer auto-imported; add explicit imports.
-needs = [
-    'import groovy.xml.XmlParser',
-    'import groovy.xml.XmlSlurper',
-    'import groovy.xml.MarkupBuilder',
-]
-lines = src.splitlines()
-last_import = max(
-    (i for i, l in enumerate(lines) if l.startswith('import ')),
-    default=0
-)
-inserted = 0
-for imp in reversed(needs):
-    if imp not in src:
-        lines.insert(last_import + 1, imp)
-        inserted += 1
-
-src = '\n'.join(lines)
-with open(path, 'w') as fh:
-    fh.write(src)
-
-if src != original:
-    print(f"Patched {inserted + (1 if 'javax.xml' in src else 0)} item(s) in {path}")
-else:
-    print("No changes needed — file already compatible with Groovy 4.x")
-PYEOF
-
-      # ── 6. Install pub packages ──────────────────────────────────────
-      - name: flutter pub get
+      - name: Install dependencies
         run: flutter pub get
 
-      # ── 7. Decode keystore ───────────────────────────────────────────
-      #   The secret is the raw base64 of your .jks file.
-      #   Written to android/app/lumina.jks — matches storeFile in
-      #   key.properties and the file() path in build.gradle.kts.
+      # ── Decode keystore ───────────────────────────────────────────────
+      # Writes the .jks file to android/app/lumina.jks
+      # Matches the storeFile path resolved by build.gradle.kts:
+      #   file("lumina.jks")  →  android/app/lumina.jks  (module-relative)
       - name: Decode keystore
         run: |
-          printf '%s' "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode \
-            > android/app/lumina.jks
-          echo "Keystore size: $(wc -c < android/app/lumina.jks) bytes"
+          printf '%s' "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/lumina.jks
+          echo "Keystore written — size: $(wc -c < android/app/lumina.jks) bytes"
 
-      # ── 8. Write key.properties ──────────────────────────────────────
-      #   Written to android/key.properties (one level above app/).
-      #   rootProject.file("key.properties") in build.gradle.kts
-      #   resolves to this exact path.
-      #   Uses printf to write each line individually — avoids any
-      #   whitespace / heredoc indentation ambiguity.
+      # ── Write key.properties ──────────────────────────────────────────
+      # Written to android/key.properties  (one level above app/).
+      # rootProject.file("key.properties") in build.gradle.kts resolves here.
+      # Using printf per line — zero heredoc / whitespace ambiguity.
       - name: Write key.properties
         run: |
-          printf 'storeFile=lumina.jks\n'                             > android/key.properties
+          printf 'storeFile=lumina.jks\n' > android/key.properties
           printf 'storePassword=%s\n' "${{ secrets.STORE_PASSWORD }}" >> android/key.properties
-          printf 'keyAlias=%s\n'      "${{ secrets.KEY_ALIAS }}"      >> android/key.properties
-          printf 'keyPassword=%s\n'   "${{ secrets.KEY_PASSWORD }}"   >> android/key.properties
-          echo "key.properties contents (passwords masked):"
+          printf 'keyAlias=%s\n' "${{ secrets.KEY_ALIAS }}" >> android/key.properties
+          printf 'keyPassword=%s\n' "${{ secrets.KEY_PASSWORD }}" >> android/key.properties
+          echo "key.properties written (passwords masked):"
           sed 's/=.*/=***/' android/key.properties
 
-      # ── 9. Build release APK ─────────────────────────────────────────
-      #   --split-per-abi → 3 lean APKs instead of one fat universal.
-      #   Remove the flag if you want a single universal APK.
       - name: Build release APK
         run: flutter build apk --release --split-per-abi
 
-      # ── 10. List outputs ─────────────────────────────────────────────
-      - name: List APKs
+      - name: List APK outputs
         run: find build/app/outputs/flutter-apk -name "*.apk" | sort
 
-      # ── 11. Upload artifact ──────────────────────────────────────────
       - name: Upload APKs as artifact
         uses: actions/upload-artifact@v4
         with:
-          name:           lumina-apk-${{ github.run_number }}
-          path:           build/app/outputs/flutter-apk/*.apk
+          name: lumina-apk-${{ github.run_number }}
+          path: build/app/outputs/flutter-apk/*.apk
           retention-days: 30
 
-      # ── 12. Compute tag / release name ───────────────────────────────
-      #   Shell step avoids inline ternary expressions in ${{ }} which
-      #   break YAML parsing when they contain '#' or unbalanced braces.
+      # ── Release metadata ───────────────────────────────────────────────
+      # Computed in a shell step so we never embed ternary logic inside
+      # ${{ }} expressions — GitHub Actions expression parser rejects
+      # inline ternaries that contain '#' or unbalanced braces in YAML.
       - name: Set release metadata
-        id:   meta
+        id: meta
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "tag=${{ github.ref_name }}"                        >> "$GITHUB_OUTPUT"
-            echo "title=Lumina ${{ github.ref_name }}"               >> "$GITHUB_OUTPUT"
-            echo "prerelease=false"                                   >> "$GITHUB_OUTPUT"
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "title=Lumina ${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=build-${{ github.run_number }}"                >> "$GITHUB_OUTPUT"
-            echo "title=Lumina — Build #${{ github.run_number }}"    >> "$GITHUB_OUTPUT"
-            echo "prerelease=true"                                    >> "$GITHUB_OUTPUT"
+            echo "tag=build-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "title=Lumina Build ${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── 13. Create GitHub Release ────────────────────────────────────
       - name: Create GitHub Release
         if: >
           startsWith(github.ref, 'refs/tags/v') ||
-          github.ref == 'refs/heads/main'        ||
+          github.ref == 'refs/heads/main' ||
           github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name:   ${{ steps.meta.outputs.tag }}
-          name:       ${{ steps.meta.outputs.title }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.title }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           body: |
             ## Lumina Reminders
 
             **Commit:** `${{ github.sha }}`
             **Branch:** ${{ github.ref_name }}
-            **Build:**  #${{ github.run_number }}
+            **Build:** #${{ github.run_number }}
 
             ${{ github.event.inputs.release_notes || github.event.head_commit.message }}
 
             ---
-            | APK file | Device |
-            |---|---|
-            | `app-arm64-v8a-release.apk`   | 64-bit ARM — all phones after 2017 ✅ |
+            | APK | Device |
+            |-----|--------|
+            | `app-arm64-v8a-release.apk` | 64-bit ARM — phones after 2017 |
             | `app-armeabi-v7a-release.apk` | 32-bit ARM — older phones |
-            | `app-x86_64-release.apk`      | x86_64 — emulators only |
+            | `app-x86_64-release.apk` | x86_64 — emulators only |
+
+            > Download `arm64-v8a` for almost all modern Android phones.
           files: build/app/outputs/flutter-apk/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ══════════════════════════════════════════════════════════════════════
+  # ════════════════════════════════════════════════════════════════════
   test:
-    name:    Run Tests
+    name: Run Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.27.4'
-          channel:         stable
-          cache:           true
+          channel: stable
+          cache: true
       - run: flutter pub get
       - name: Run tests
         run: |
           if find test -name '*_test.dart' 2>/dev/null | grep -q .; then
             flutter test --reporter compact
           else
-            echo "No test files found — skipping."
+            echo "No test files found — skipping"
           fi
         continue-on-error: true
