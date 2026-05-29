@@ -1,148 +1,107 @@
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  .github/workflows/build_apk.yml                                     ║
-# ║  Builds a signed release APK on every push to main / on manual       ║
-# ║  trigger, and attaches it to a GitHub Release automatically.          ║
-# ╚══════════════════════════════════════════════════════════════════════╝
+# .github/workflows/build_apk.yml
 #
-# ── Required GitHub Secrets ───────────────────────────────────────────────────
-#   KEYSTORE_BASE64   →  base64-encoded JKS keystore file
-#                        Generate: keytool -genkey -v -keystore lumina.jks \
-#                          -keyalg RSA -keysize 2048 -validity 10000 \
-#                          -alias lumina
-#                        Encode:   base64 -i lumina.jks | pbcopy   (macOS)
-#                                  base64 lumina.jks               (Linux)
+# Required secrets (Settings → Secrets and variables → Actions):
+#   KEYSTORE_BASE64  → base64 -w 0 lumina.jks        (Linux)
+#                      base64 -i lumina.jks | tr -d '\n'  (macOS)
+#   STORE_PASSWORD   → keystore password
+#   KEY_ALIAS        → key alias (e.g. lumina)
+#   KEY_PASSWORD     → key password
 #
-#   KEY_ALIAS         →  The alias used above (e.g.  lumina)
-#   KEY_PASSWORD      →  Password for the key alias
-#   STORE_PASSWORD    →  Password for the keystore file
-#
-# How to add secrets:
-#   GitHub repo → Settings → Secrets and variables → Actions → New repository secret
-# ─────────────────────────────────────────────────────────────────────────────
+# If secrets are not set the build still succeeds with a debug-signed APK.
 
 name: Build & Release APK
 
 on:
   push:
-    branches: [ main, master ]
-    tags:
-      - 'v*'          # trigger on version tags like v1.0.0
-
-  workflow_dispatch:  # manual trigger from GitHub Actions UI
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
     inputs:
       release_notes:
-        description: 'What changed in this build?'
+        description: 'Release notes'
         required: false
-        default:  'New build'
+        default: 'New build'
 
-# ── Concurrency: cancel any in-progress run for the same branch ───────────────
 concurrency:
-  group:              ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ════════════════════════════════════════════════════════════════════════════
   build:
-    name:    Build Signed APK
+    name: Build Signed APK
     runs-on: ubuntu-latest
 
     steps:
-      # 1 ── Checkout source code ─────────────────────────────────────────────
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2 ── Set up Java 17 (required by Android Gradle Plugin 8+) ────────────
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache:        gradle
+          cache: gradle
 
-      # 3 ── Set up Flutter (stable channel) ──────────────────────────────────
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.29.2'
-          channel:         stable
-          cache:           true
+          channel: stable
+          cache: true
 
-      # 4 ── Print versions for debugging ─────────────────────────────────────
-      - name: Flutter & Dart versions
+      # AGP 9.0.1 needs Gradle 9.1+ but Flutter 3.29.2 breaks on Gradle 9.
+      # Downgrade AGP → 8.7.0 and Kotlin → 2.1.0 so Gradle 8.11.1 works for all.
+      - name: Patch AGP and Kotlin versions
         run: |
-          flutter --version
-          dart   --version
+          sed -i 's|id("com.android.application") version "[^"]*"|id("com.android.application") version "8.7.0"|' android/settings.gradle.kts
+          sed -i 's|id("org.jetbrains.kotlin.android") version "[^"]*"|id("org.jetbrains.kotlin.android") version "2.1.0"|' android/settings.gradle.kts
+          echo "Patched settings.gradle.kts:"
+          grep -E 'com.android.application|kotlin.android' android/settings.gradle.kts
 
-      # ── Patch android/settings.gradle.kts ────────────────────────────────
-      # AGP 9.0.1 requires Gradle 9.1.0+, but Flutter 3.29.2's Kotlin Gradle
-      # plugin uses APIs removed in Gradle 9 (fileMode, String.toLowerCase).
-      # Downgrading AGP → 8.7.0 and Kotlin → 2.1.0 lets us stay on Gradle
-      # 8.11.1 where everything is compatible. Changes are runner-only.
-      - name: Patch settings.gradle.kts (AGP 8.7.0 + Kotlin 2.1.0)
+      - name: Pin Gradle to 8.11.1
         run: |
-          SFILE="android/settings.gradle.kts"
-          sed -i 's|id("com.android.application") version "[^"]*"|id("com.android.application") version "8.7.0"|g' "$SFILE"
-          sed -i 's|id("org.jetbrains.kotlin.android") version "[^"]*"|id("org.jetbrains.kotlin.android") version "2.1.0"|g' "$SFILE"
-          echo "Patched $SFILE:"
-          grep 'com.android.application\|kotlin.android' "$SFILE"
-
-      # ── Pin Gradle wrapper to 8.11.1 ─────────────────────────────────────
-      # AGP 8.7.0 minimum is Gradle 8.9. 8.11.1 is the latest stable 8.x
-      # release — stays below Gradle 9 where Flutter's plugin breaks.
-      - name: Patch gradle-wrapper.properties (Gradle 8.11.1)
-        run: |
-          WFILE="android/gradle/wrapper/gradle-wrapper.properties"
-          sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-all.zip|' "$WFILE"
+          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-all.zip|' \
+            android/gradle/wrapper/gradle-wrapper.properties
           echo "Gradle wrapper:"
-          cat "$WFILE"
+          cat android/gradle/wrapper/gradle-wrapper.properties
 
-      # ── Upgrade flutter_timezone ──────────────────────────────────────────
-      # flutter_timezone 1.0.8 uses PluginRegistry.Registrar (Flutter v1
-      # embedding API) which was fully removed. v3+ uses the current v2 API.
-      # Patching pubspec.yaml on the runner; your local file is untouched.
+      # flutter_timezone 1.x uses removed Flutter v1 embedding API (Registrar).
       - name: Upgrade flutter_timezone to v3
         run: |
           sed -i 's/flutter_timezone:.*$/flutter_timezone: ^3.0.0/' pubspec.yaml
-          echo "flutter_timezone line after patch:"
           grep flutter_timezone pubspec.yaml
 
       - name: Install dependencies
         run: flutter pub get
 
-      # 7 ── Run static analysis ──────────────────────────────────────────────
-      - name: Analyze code
+      - name: Analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
-        continue-on-error: true   # don't fail the build on deprecation warnings
+        continue-on-error: true
 
-      # 8 ── Keystore: decode → convert → write key.properties ────────────────
-      # All three sub-steps are skipped when KEYSTORE_BASE64 is not set.
-      # build.gradle.kts falls back to the debug keystore automatically,
-      # so the build still succeeds and produces a (debug-signed) APK.
-      # To enable release signing: add the four secrets documented at the top
-      # of this file to Settings → Secrets and variables → Actions.
-      - name: Setup release signing (skipped if secrets not set)
+      # Skips entirely if KEYSTORE_BASE64 secret is not set.
+      # build.gradle.kts falls back to the debug keystore automatically.
+      - name: Setup release signing
         env:
-          KS_B64:        ${{ secrets.KEYSTORE_BASE64 }}
-          STORE_PASS:    ${{ secrets.STORE_PASSWORD }}
-          KEY_PASS:      ${{ secrets.KEY_PASSWORD }}
-          KEY_ALIAS:     ${{ secrets.KEY_ALIAS }}
+          KS_B64:     ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASS:   ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS:  ${{ secrets.KEY_ALIAS }}
         run: |
           if [ -z "$KS_B64" ]; then
-            echo "KEYSTORE_BASE64 not set — using debug keystore (APK will be debug-signed)"
+            echo "No keystore secret found — build will use debug signing."
             exit 0
           fi
 
-          # ── 1. Decode ────────────────────────────────────────────────────
           echo "$KS_B64" | base64 --decode > android/app/lumina.jks
           BYTES=$(wc -c < android/app/lumina.jks)
-          echo "Keystore decoded: $BYTES bytes"
+          echo "Decoded: $BYTES bytes"
+
           if [ "$BYTES" -eq 0 ]; then
-            echo "ERROR: decoded keystore is empty — check KEYSTORE_BASE64 secret"
+            echo "Keystore decoded to 0 bytes — check KEYSTORE_BASE64 secret value."
             exit 1
           fi
 
-          # ── 2. Convert to legacy PKCS12 (Java 17 writes AES-256 by default;
-          #       AGP signing tools only read the old 3DES format) ──────────
+          # Java 17 writes PKCS12 with AES-256; AGP signing tools need legacy 3DES.
           keytool -importkeystore \
             -srckeystore   android/app/lumina.jks \
             -srcstorepass  "$STORE_PASS" \
@@ -152,106 +111,80 @@ jobs:
             -noprompt \
             -J-Dkeystore.pkcs12.legacy 2>&1
           mv android/app/lumina_compat.jks android/app/lumina.jks
-          echo "Keystore converted to legacy PKCS12: $(wc -c < android/app/lumina.jks) bytes"
+          echo "Converted to legacy PKCS12: $(wc -c < android/app/lumina.jks) bytes"
 
-          # ── 3. Write key.properties ──────────────────────────────────────
-          printf 'storeFile=lumina.jks
-'       >  android/key.properties
-          printf 'storePassword=%s
-' "$STORE_PASS" >> android/key.properties
-          printf 'keyAlias=%s
-'      "$KEY_ALIAS"  >> android/key.properties
-          printf 'keyPassword=%s
-'   "$KEY_PASS"   >> android/key.properties
-          echo "key.properties written"
+          printf 'storeFile=lumina.jks\n'           >  android/key.properties
+          printf 'storePassword=%s\n' "$STORE_PASS" >> android/key.properties
+          printf 'keyAlias=%s\n'      "$KEY_ALIAS"  >> android/key.properties
+          printf 'keyPassword=%s\n'   "$KEY_PASS"   >> android/key.properties
+          echo "key.properties written."
 
-      # 10 ── Build release APK ───────────────────────────────────────────────
-      - name: Build release APK
+      - name: Build APK
         run: flutter build apk --release --split-per-abi
-        # --split-per-abi produces 3 smaller APKs (arm32, arm64, x86_64)
-        # instead of one fat APK. Remove the flag for a single universal APK.
 
-      # 11 ── List build outputs (useful for debugging path issues) ──────────
-      - name: List APK outputs
-        run: find build/app/outputs/flutter-apk -name "*.apk" -type f
+      - name: List APKs
+        run: find build/app/outputs/flutter-apk -name "*.apk" | sort
 
-      # 12 ── Upload APK as workflow artifact (always available) ─────────────
-      - name: Upload APKs as artifact
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name:             lumina-apk-${{ github.sha }}
-          path:             build/app/outputs/flutter-apk/*.apk
-          retention-days:   30
+          name: apk-${{ github.run_number }}
+          path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 30
 
-      # 13 ── Compute release tag & name ─────────────────────────────────────
-      # FIX: Moved ternary logic into a shell step to avoid YAML comment-char
-      #      (#) and unclosed-expression errors in inline ${{ }} expressions.
       - name: Set release metadata
         id: meta
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "tag_name=${{ github.ref_name }}"             >> $GITHUB_OUTPUT
-            echo "release_name=Lumina ${{ github.ref_name }}"  >> $GITHUB_OUTPUT
+            echo "tag=${{ github.ref_name }}"            >> "$GITHUB_OUTPUT"
+            echo "title=Release ${{ github.ref_name }}"  >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"                       >> "$GITHUB_OUTPUT"
           else
-            echo "tag_name=build-${{ github.run_number }}"                >> $GITHUB_OUTPUT
-            echo "release_name=Lumina Build ${{ github.run_number }}"     >> $GITHUB_OUTPUT
+            echo "tag=build-${{ github.run_number }}"         >> "$GITHUB_OUTPUT"
+            echo "title=Build ${{ github.run_number }}"       >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"                            >> "$GITHUB_OUTPUT"
           fi
 
-      # 14 ── Create GitHub Release (only on version tags or main branch) ─────
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: >
+          startsWith(github.ref, 'refs/tags/v') ||
+          github.ref == 'refs/heads/main' ||
+          github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag_name }}
-          name:     ${{ steps.meta.outputs.release_name }}
+          tag_name:   ${{ steps.meta.outputs.tag }}
+          name:       ${{ steps.meta.outputs.title }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
           body: |
-            ## Lumina Reminders — Automated Build
-
             **Commit:** `${{ github.sha }}`
-            **Branch:**  ${{ github.ref_name }}
-            **Built at:** ${{ github.event.head_commit.timestamp }}
-
+            **Branch:** ${{ github.ref_name }}
             ${{ github.event.inputs.release_notes || github.event.head_commit.message }}
 
-            ---
-            ### APK Downloads
-            | File | Architecture |
-            |------|-------------|
-            | `app-arm64-v8a-release.apk`  | 64-bit ARM  (most modern phones) |
-            | `app-armeabi-v7a-release.apk`| 32-bit ARM  (older phones)       |
-            | `app-x86_64-release.apk`     | 64-bit x86  (emulators)          |
-
-            > **Install tip:** Download the `arm64-v8a` APK for any phone made after 2017.
+            | APK | Architecture |
+            |-----|-------------|
+            | `app-arm64-v8a-release.apk` | 64-bit ARM — most phones after 2017 |
+            | `app-armeabi-v7a-release.apk` | 32-bit ARM — older phones |
+            | `app-x86_64-release.apk` | x86_64 — emulators |
           files: build/app/outputs/flutter-apk/*.apk
-          draft:      false
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ════════════════════════════════════════════════════════════════════════════
-  # Optional: run Flutter unit tests before building
   test:
-    name:    Run Tests
+    name: Run Tests
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.29.2'
-          channel:         stable
-          cache:           true
-
-
-      - name: Install dependencies
-        run: flutter pub get
-
+          channel: stable
+          cache: true
+      - run: flutter pub get
       - name: Run tests
         run: |
-          if [ -d "test" ] && [ -n "$(find test -name '*_test.dart' 2>/dev/null)" ]; then
+          if find test -name '*_test.dart' 2>/dev/null | grep -q .; then
             flutter test --reporter compact
           else
-            echo "No test files found — skipping."
+            echo "No test files — skipping."
           fi
         continue-on-error: true
